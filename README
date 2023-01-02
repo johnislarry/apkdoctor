@@ -1,0 +1,16 @@
+Ideas for remediations:
+
+Baseline Profiles:
+- See if baseline profile exists
+- Decompile baseline profile and check method coverage.
+
+App Size:
+- Breakdown of file size per file type, dex, native code, JS, etc.
+- assets/ file size histogram
+- Identify good candidates for compression
+
+Security:
+- Filter the output of running `strings` for dictionary words and detect suspicious.
+
+Native Code:
+- Check for unstripped native libs.
