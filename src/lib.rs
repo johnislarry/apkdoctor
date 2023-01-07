@@ -1,16 +1,31 @@
 use std::{
     array::TryFromSliceError,
+    fmt::Debug,
     fs::File,
-    io::{self, BufReader, Read},
+    io::{self, BufRead, BufReader, Cursor, Read},
     mem::{self},
 };
+
+use decode::{decode_u16, decode_u8, decode_uleb128};
+use dex_structs::{
+    AnnotationItem, AnnotationOffItem, AnnotationSetItem, AnnotationSetRefItem,
+    AnnotationSetRefList, AnnotationsDirectoryItem, CallSiteIdItem, ClassDataItem, ClassDefItem,
+    CodeItem, DebugInfoItem, EncodedAnnotation, EncodedArray, EncodedArrayItem, FieldIdItem,
+    Header, HiddenapiClassDataItem, MapItem, MapList, MethodHandleItem, MethodIdItem, ProtoIdItem,
+    StringDataItem, StringIdItem, TypeCode, TypeIdItem, TypeItem, TypeList,
+};
+
+use crate::decode::decode_u32;
+
+mod decode;
+mod dex_structs;
 
 #[allow(non_camel_case_types)]
 type uleb128 = u32;
 #[allow(non_camel_case_types)]
-type sleb128 = u32;
+type sleb128 = i32;
 #[allow(non_camel_case_types)]
-type uleb128p1 = u32;
+type uleb128p1 = i32;
 
 #[derive(Debug)]
 pub enum DeserializeError {
@@ -31,352 +46,6 @@ impl From<TryFromSliceError> for DeserializeError {
     }
 }
 
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub struct Header {
-    pub magic: [u8; 8],
-    pub checksum: u32,
-    pub signature: [u8; 20],
-    pub file_size: u32,
-    pub header_size: u32,
-    pub endian_tag: u32,
-    pub link_size: u32,
-    pub link_off: u32,
-    pub map_off: u32,
-    pub string_ids_size: u32,
-    pub string_ids_off: u32,
-    pub type_ids_size: u32,
-    pub type_ids_off: u32,
-    pub proto_ids_size: u32,
-    pub proto_ids_off: u32,
-    pub field_ids_size: u32,
-    pub field_ids_off: u32,
-    pub method_ids_size: u32,
-    pub method_ids_off: u32,
-    pub class_defs_size: u32,
-    pub class_defs_off: u32,
-    pub data_size: u32,
-    pub data_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct StringIdItem {
-    pub string_data_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct StringDataItem {
-    pub utf16_size: uleb128,
-    pub data: Vec<u8>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct TypeIdItem {
-    pub descriptor_idx: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct ProtoIdItem {
-    pub shorty_idx: u32,
-    pub return_type_idx: u32,
-    pub parameters_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct FieldIdItem {
-    pub class_idx: u16,
-    pub type_idx: u16,
-    pub name_idx: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct MethodIdItem {
-    pub class_idx: u16,
-    pub proto_idx: u16,
-    pub name_idx: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct ClassDefItem {
-    pub class_idx: u32,
-    pub access_flags: u32,
-    pub superclass_idx: u32,
-    pub interfaces_off: u32,
-    pub source_file_idx: u32,
-    pub annotations_off: u32,
-    pub class_data_off: u32,
-    pub static_values_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct CallSiteIdItem {
-    pub call_site_off: u32,
-}
-
-pub type CallSiteItem = EncodedArrayItem;
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedArrayItem {
-    pub value: EncodedArray,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedArray {
-    pub size: uleb128,
-    pub values: Vec<EncodedValue>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedValue {
-    pub value_arg: u8,
-    pub value: Vec<u8>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct MethodHandleItem {
-    pub method_handle_type: u16,
-    pub unused1: u16,
-    pub field_or_method_id: u16,
-    pub unused2: u16,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct ClassDataItem {
-    pub static_fields_size: uleb128,
-    pub instance_fields_size: uleb128,
-    pub direct_methods_size: uleb128,
-    pub virtual_methods_size: uleb128,
-    pub static_fields: Vec<EncodedField>,
-    pub instance_fields: Vec<EncodedField>,
-    pub direct_methods: Vec<EncodedMethod>,
-    pub virtual_methods: Vec<EncodedMethod>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedField {
-    pub field_idx_off: uleb128,
-    pub access_flags: uleb128,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedMethod {
-    pub method_idx_off: uleb128,
-    pub access_flags: uleb128,
-    pub code_off: uleb128,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct TypeList {
-    pub size: u32,
-    pub list: Vec<TypeItem>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct TypeItem {
-    pub type_idx: u16,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct CodeItem {
-    pub registers_size: u16,
-    pub ins_size: u16,
-    pub outs_size: u16,
-    pub tries_size: u16,
-    pub debug_info_off: u32,
-    pub insns_size: u32,
-    pub insns: Vec<u16>,
-    pub tries: Vec<TryItem>,
-    pub handlers: Vec<EncodedCatchHandlerList>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct TryItem {
-    pub start_addr: u32,
-    pub insn_count: u16,
-    pub handler_off: u16,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedCatchHandlerList {
-    pub size: uleb128,
-    pub list: Vec<EncodedCatchHandler>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedCatchHandler {
-    pub size: sleb128,
-    pub handlers: Vec<EncodedTypeAddressPair>,
-    pub catch_all_addr: uleb128,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedTypeAddressPair {
-    pub type_idx: uleb128,
-    pub addr: uleb128,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct DebugInfoItem {
-    pub line_start: uleb128,
-    pub parameters_size: uleb128,
-    pub parameter_names: Vec<uleb128p1>,
-    pub bytecode: Vec<u8>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct AnnotationsDirectoryItem {
-    pub class_annotations_off: u32,
-    pub fields_size: u32,
-    pub annotated_methods_size: u32,
-    pub annotated_parameters_size: u32,
-    pub field_annotations: Vec<FieldAnnotation>,
-    pub method_annotations: Vec<MethodAnnotation>,
-    pub parameter_annotations: Vec<ParameterAnnotation>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct FieldAnnotation {
-    pub field_idx: u32,
-    pub annotations_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct MethodAnnotation {
-    pub method_idx: u32,
-    pub annotations_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct ParameterAnnotation {
-    pub method_idx: u32,
-    pub annotations_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct AnnotationSetRefList {
-    pub size: u32,
-    pub list: Vec<AnnotationSetRefItem>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct AnnotationSetRefItem {
-    pub annotations_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct AnnotationSetItem {
-    pub size: u32,
-    pub entries: Vec<AnnotationOffItem>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct AnnotationOffItem {
-    pub annotation_off: u32,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct AnnotationItem {
-    pub visibility: u8,
-    pub annotation: EncodedAnnotation,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct EncodedAnnotation {
-    pub type_idx: uleb128,
-    pub size: uleb128,
-    pub elements: Vec<AnnotationElement>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct AnnotationElement {
-    pub name_idx: uleb128,
-    pub value: EncodedValue,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct HiddenapiClassDataItem {
-    pub size: u32,
-    pub offsets: Vec<u32>,
-    pub flags: Vec<uleb128>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct MapList {
-    pub size: u32,
-    pub list: Vec<MapItem>,
-}
-
-#[derive(Debug)]
-#[repr(C)]
-pub struct MapItem {
-    pub type_code: TypeCode,
-    pub unused: u16,
-    pub size: u32,
-    pub offset: u32,
-}
-
-#[derive(Debug, PartialEq)]
-#[repr(u16)]
-pub enum TypeCode {
-    TypeHeaderItem = 0x0000,
-    TypeStringIdItem = 0x0001,
-    TypeTypeIdItem = 0x0002,
-    TypeProtoIdItem = 0x0003,
-    TypeFieldIdItem = 0x0004,
-    TypeMethodIdItem = 0x0005,
-    TypeClassDefItem = 0x0006,
-    TypeCallSiteIdItem = 0x0007,
-    TypeMethodHandleItem = 0x0008,
-    TypeMapList = 0x1000,
-    TypeTypeList = 0x1001,
-    TypeAnnotationSetRefList = 0x1002,
-    TypeAnnotationSetItem = 0x1003,
-    TypeClassDataItem = 0x2000,
-    TypeCodeItem = 0x2001,
-    TypeStringDataItem = 0x2002,
-    TypeDebugInfoItem = 0x2003,
-    TypeAnnotationItem = 0x2004,
-    TypeEncodedArrayItem = 0x2005,
-    TypeAnnotationsDirectoryItem = 0x2006,
-    TypeHiddenapiClassDataItem = 0xF000,
-}
-
 #[derive(Debug)]
 #[repr(C)]
 pub struct DexFile {
@@ -389,8 +58,20 @@ pub struct DexFile {
     pub class_defs: Vec<ClassDefItem>,
     pub call_site_ids: Vec<CallSiteIdItem>,
     pub method_handles: Vec<MethodHandleItem>,
-    pub data: Vec<u8>, // TODO: Flesh this out.
+    pub data: Vec<u8>,
+    pub type_lists: Vec<TypeList>,
+    pub string_data_items: Vec<StringDataItem>,
+    pub annotation_set_ref_lists: Vec<AnnotationSetRefList>,
+    pub annotation_set_items: Vec<AnnotationSetItem>,
+    pub annotation_items: Vec<AnnotationItem>,
+    pub annotations_directory_items: Vec<AnnotationsDirectoryItem>,
+    pub hiddenapi_class_data_items: Vec<HiddenapiClassDataItem>,
+    pub encoded_array_items: Vec<EncodedArrayItem>,
+    pub class_data_items: Vec<ClassDataItem>,
+    pub debug_info_items: Vec<DebugInfoItem>,
+    pub code_items: Vec<CodeItem>,
     pub link_data: Vec<u8>,
+    pub map_list: MapList,
 }
 
 macro_rules! transmute_dex_struct {
@@ -419,6 +100,221 @@ macro_rules! reverse_transmute_dex_struct {
     ($t:ty,$struct:expr) => {{
         unsafe { std::mem::transmute::<$t, [u8; mem::size_of::<$t>()]>($struct).to_vec() }
     }};
+}
+
+fn deserialize_string_data_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<StringDataItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    // let size = map_item.size;
+    // let offset = map_item.offset;
+    let mut string_data_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        let item_size = decode_uleb128(&mut cursor) as usize;
+        let mut buf = vec![];
+        cursor.read_until(0, &mut buf)?;
+
+        // https://android.googlesource.com/platform/libcore/+/9edf43dfcc35c761d97eb9156ac4254152ddbc55/dex/src/main/java/com/android/dex/Mutf8.java
+        // let x = mutf8::decode(&buf).unwrap().to_string();
+
+        string_data_items.push(StringDataItem {
+            utf16_size: item_size as u32,
+            data: buf,
+        });
+    }
+    return Ok(string_data_items);
+}
+
+fn deserialize_type_lists(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<TypeList>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut type_lists = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        let initial_position = cursor.position();
+        let list_size = decode_u32(&mut cursor);
+
+        let mut type_items = vec![];
+        for _ in 0..list_size {
+            type_items.push(TypeItem {
+                type_idx: decode_u16(&mut cursor),
+            });
+        }
+
+        type_lists.push(TypeList {
+            size: list_size,
+            list: type_items,
+        });
+
+        // Ensure 4 byte alignment by burning off 2 bytes when needed.
+        if (cursor.position() - initial_position) % 4 != 0 {
+            assert!(decode_u16(&mut cursor) == 0);
+        }
+    }
+    return Ok(type_lists);
+}
+
+fn deserialize_annotation_set_ref_lists(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<AnnotationSetRefList>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut annotation_set_ref_lists = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        let list_size = decode_u32(&mut cursor);
+
+        let mut items = vec![];
+        for _ in 0..list_size {
+            items.push(AnnotationSetRefItem {
+                annotations_off: decode_u32(&mut cursor),
+            });
+        }
+
+        annotation_set_ref_lists.push(AnnotationSetRefList {
+            size: list_size,
+            list: items,
+        });
+    }
+    return Ok(annotation_set_ref_lists);
+}
+
+fn deserialize_annotation_set_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<AnnotationSetItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut annotation_set_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        let set_size = decode_u32(&mut cursor);
+
+        let mut items = vec![];
+        for _ in 0..set_size {
+            items.push(AnnotationOffItem {
+                annotation_off: decode_u32(&mut cursor),
+            });
+        }
+
+        annotation_set_items.push(AnnotationSetItem {
+            size: set_size,
+            entries: items,
+        });
+    }
+    return Ok(annotation_set_items);
+}
+
+fn deserialize_annotation_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<AnnotationItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut annotation_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        let visibility = decode_u8(&mut cursor);
+        let annotation = EncodedAnnotation::deserialize(&mut cursor);
+        annotation_items.push(AnnotationItem {
+            visibility,
+            annotation,
+        });
+    }
+    return Ok(annotation_items);
+}
+
+fn deserialize_encoded_array_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<EncodedArrayItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut encoded_array_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        let value = EncodedArray::deserialize(&mut cursor);
+        encoded_array_items.push(EncodedArrayItem { value });
+    }
+    return Ok(encoded_array_items);
+}
+
+fn deserialize_annotations_directory_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<AnnotationsDirectoryItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut annotations_directory_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        annotations_directory_items.push(AnnotationsDirectoryItem::deserialize(&mut cursor));
+    }
+    return Ok(annotations_directory_items);
+}
+
+fn deserialize_class_data_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<ClassDataItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut class_data_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        class_data_items.push(ClassDataItem::deserialize(&mut cursor));
+    }
+    return Ok(class_data_items);
+}
+
+fn deserialize_debug_info_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<DebugInfoItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut debug_info_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        debug_info_items.push(DebugInfoItem::deserialize(&mut cursor));
+    }
+    return Ok(debug_info_items);
+}
+
+fn deserialize_code_items(
+    map_item: MapItem,
+    bytes: &Vec<u8>,
+) -> Result<Vec<CodeItem>, DeserializeError> {
+    let MapItem { size, offset, .. } = map_item;
+    let mut code_items = vec![];
+    let mut cursor = Cursor::new(bytes);
+    cursor.set_position(offset as u64);
+
+    for _ in 0..size {
+        code_items.push(CodeItem::deserialize(&mut cursor));
+
+        // Ensure 4 byte alignment by burning off bytes when needed.
+        while cursor.position() % 4 != 0 {
+            decode_u8(&mut cursor);
+        }
+    }
+    return Ok(code_items);
 }
 
 pub fn deserialize(filepath: String) -> Result<DexFile, DeserializeError> {
@@ -492,6 +388,61 @@ pub fn deserialize(filepath: String) -> Result<DexFile, DeserializeError> {
 
     let data = bytes[i..(i + header.data_size as usize)].to_vec();
 
+    let string_data_items = match map_list.get(TypeCode::TypeStringDataItem) {
+        Some(map_item) => deserialize_string_data_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let type_lists = match map_list.get(TypeCode::TypeTypeList) {
+        Some(map_item) => deserialize_type_lists(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let annotation_set_ref_lists = match map_list.get(TypeCode::TypeAnnotationSetRefList) {
+        Some(map_item) => deserialize_annotation_set_ref_lists(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let annotation_set_items = match map_list.get(TypeCode::TypeAnnotationSetItem) {
+        Some(map_item) => deserialize_annotation_set_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let annotation_items = match map_list.get(TypeCode::TypeAnnotationItem) {
+        Some(map_item) => deserialize_annotation_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let annotations_directory_items = match map_list.get(TypeCode::TypeAnnotationsDirectoryItem) {
+        Some(map_item) => deserialize_annotations_directory_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let hiddenapi_class_data_items = match map_list.get(TypeCode::TypeHiddenapiClassDataItem) {
+        Some(_) => unimplemented!("hope this never happens lol"),
+        None => vec![],
+    };
+
+    let encoded_array_items = match map_list.get(TypeCode::TypeEncodedArrayItem) {
+        Some(map_item) => deserialize_encoded_array_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let class_data_items = match map_list.get(TypeCode::TypeClassDataItem) {
+        Some(map_item) => deserialize_class_data_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let debug_info_items = match map_list.get(TypeCode::TypeDebugInfoItem) {
+        Some(map_item) => deserialize_debug_info_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
+    let code_items = match map_list.get(TypeCode::TypeCodeItem) {
+        Some(map_item) => deserialize_code_items(map_item, &bytes)?,
+        None => vec![],
+    };
+
     let link_data =
         bytes[header.link_off as usize..(header.link_off + header.link_size) as usize].to_vec();
 
@@ -506,7 +457,19 @@ pub fn deserialize(filepath: String) -> Result<DexFile, DeserializeError> {
         call_site_ids,
         method_handles,
         data,
+        string_data_items,
+        type_lists,
+        annotation_set_ref_lists,
+        annotation_set_items,
+        annotation_items,
+        annotations_directory_items,
+        hiddenapi_class_data_items,
+        encoded_array_items,
+        class_data_items,
+        debug_info_items,
+        code_items,
         link_data,
+        map_list,
     });
 }
 

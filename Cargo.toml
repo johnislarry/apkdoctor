@@ -13,6 +13,7 @@ name = "benchmark"
 harness = false
 
 [dependencies]
+residua-mutf8 = "2.0.0"
 
 [features]
 html_reports = []
