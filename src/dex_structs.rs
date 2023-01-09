@@ -1,4 +1,4 @@
-use std::{io, vec};
+use std::{fmt::Debug, io, vec};
 
 use crate::{
     decode::{
@@ -6,11 +6,24 @@ use crate::{
         decode_nbytes_unsigned, decode_sleb128, decode_u16, decode_u32, decode_u8, decode_uleb128,
         decode_uleb128p1,
     },
+    encode::{encode_nbytes, encode_u16, encode_u32, encode_u8, encode_uleb128},
+    encoded_value_utils::{
+        get_required_bytes, get_required_bytes_for_f32, get_required_bytes_for_f64,
+    },
     sleb128, uleb128, uleb128p1,
 };
 
+pub trait DexStruct {
+    const ALIGNMENT: u64;
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead;
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write;
+}
+
 #[derive(Clone, Copy, Debug)]
-#[repr(C)]
 pub struct Header {
     pub magic: [u8; 8],
     pub checksum: u32,
@@ -37,51 +50,285 @@ pub struct Header {
     pub data_off: u32,
 }
 
-#[derive(Debug)]
-#[repr(C)]
-pub struct StringIdItem {
-    pub string_data_off: u32,
+impl DexStruct for Header {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let mut magic = [0u8; 8];
+        r.read_exact(&mut magic)
+            .expect("Could not read magic number");
+        let checksum = decode_u32(r);
+        let mut signature = [0u8; 20];
+        r.read_exact(&mut signature)
+            .expect("Could not read signature");
+        let file_size = decode_u32(r);
+        let header_size = decode_u32(r);
+        let endian_tag = decode_u32(r);
+        let link_size = decode_u32(r);
+        let link_off = decode_u32(r);
+        let map_off = decode_u32(r);
+        let string_ids_size = decode_u32(r);
+        let string_ids_off = decode_u32(r);
+        let type_ids_size = decode_u32(r);
+        let type_ids_off = decode_u32(r);
+        let proto_ids_size = decode_u32(r);
+        let proto_ids_off = decode_u32(r);
+        let field_ids_size = decode_u32(r);
+        let field_ids_off = decode_u32(r);
+        let method_ids_size = decode_u32(r);
+        let method_ids_off = decode_u32(r);
+        let class_defs_size = decode_u32(r);
+        let class_defs_off = decode_u32(r);
+        let data_size = decode_u32(r);
+        let data_off = decode_u32(r);
+
+        return Self {
+            magic,
+            checksum,
+            signature,
+            file_size,
+            header_size,
+            endian_tag,
+            link_size,
+            link_off,
+            map_off,
+            string_ids_size,
+            string_ids_off,
+            type_ids_size,
+            type_ids_off,
+            proto_ids_size,
+            proto_ids_off,
+            field_ids_size,
+            field_ids_off,
+            method_ids_size,
+            method_ids_off,
+            class_defs_size,
+            class_defs_off,
+            data_size,
+            data_off,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        w.write(&self.magic).expect("Could not write magic.");
+        encode_u32(w, self.checksum);
+        w.write(&self.signature)
+            .expect("Could not write signature.");
+        encode_u32(w, self.file_size);
+        encode_u32(w, self.header_size);
+        encode_u32(w, self.endian_tag);
+        encode_u32(w, self.link_size);
+        encode_u32(w, self.link_off);
+        encode_u32(w, self.map_off);
+        encode_u32(w, self.string_ids_size);
+        encode_u32(w, self.string_ids_off);
+        encode_u32(w, self.type_ids_size);
+        encode_u32(w, self.type_ids_off);
+        encode_u32(w, self.proto_ids_size);
+        encode_u32(w, self.proto_ids_off);
+        encode_u32(w, self.field_ids_size);
+        encode_u32(w, self.field_ids_off);
+        encode_u32(w, self.method_ids_size);
+        encode_u32(w, self.method_ids_off);
+        encode_u32(w, self.class_defs_size);
+        encode_u32(w, self.class_defs_off);
+        encode_u32(w, self.data_size);
+        encode_u32(w, self.data_off);
+    }
 }
 
 #[derive(Debug)]
-#[repr(C)]
+pub struct StringIdItem {
+    pub string_data_off: u32,
+}
+impl DexStruct for StringIdItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let string_data_off = decode_u32(r);
+        return Self { string_data_off };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.string_data_off);
+    }
+}
+
+#[derive(Debug)]
 pub struct StringDataItem {
     pub utf16_size: uleb128,
     pub data: Vec<u8>,
 }
 
+impl DexStruct for StringDataItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let size = decode_uleb128(r);
+        let mut buf = vec![];
+        r.read_until(0, &mut buf)
+            .expect("Could not deserialize string data");
+
+        // https://android.googlesource.com/platform/libcore/+/9edf43dfcc35c761d97eb9156ac4254152ddbc55/dex/src/main/java/com/android/dex/Mutf8.java
+        // let x = mutf8::decode(&buf).unwrap().to_string();
+
+        return Self {
+            utf16_size: size,
+            data: buf,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_uleb128(w, self.utf16_size);
+        w.write(&self.data).expect("failed to write string data");
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct TypeIdItem {
     pub descriptor_idx: u32,
 }
 
+impl DexStruct for TypeIdItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let descriptor_idx = decode_u32(r);
+        return Self { descriptor_idx };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.descriptor_idx);
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct ProtoIdItem {
     pub shorty_idx: u32,
     pub return_type_idx: u32,
     pub parameters_off: u32,
 }
 
+impl DexStruct for ProtoIdItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let shorty_idx = decode_u32(r);
+        let return_type_idx = decode_u32(r);
+        let parameters_off = decode_u32(r);
+        return Self {
+            shorty_idx,
+            return_type_idx,
+            parameters_off,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.shorty_idx);
+        encode_u32(w, self.return_type_idx);
+        encode_u32(w, self.parameters_off);
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct FieldIdItem {
     pub class_idx: u16,
     pub type_idx: u16,
     pub name_idx: u32,
 }
 
+impl DexStruct for FieldIdItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let class_idx = decode_u16(r);
+        let type_idx = decode_u16(r);
+        let name_idx = decode_u32(r);
+        return Self {
+            class_idx,
+            type_idx,
+            name_idx,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u16(w, self.class_idx);
+        encode_u16(w, self.type_idx);
+        encode_u32(w, self.name_idx);
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct MethodIdItem {
     pub class_idx: u16,
     pub proto_idx: u16,
     pub name_idx: u32,
 }
 
+impl DexStruct for MethodIdItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let class_idx = decode_u16(r);
+        let proto_idx = decode_u16(r);
+        let name_idx = decode_u32(r);
+        return Self {
+            class_idx,
+            proto_idx,
+            name_idx,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u16(w, self.class_idx);
+        encode_u16(w, self.proto_idx);
+        encode_u32(w, self.name_idx);
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct ClassDefItem {
     pub class_idx: u32,
     pub access_flags: u32,
@@ -93,10 +340,70 @@ pub struct ClassDefItem {
     pub static_values_off: u32,
 }
 
+impl DexStruct for ClassDefItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let class_idx = decode_u32(r);
+        let access_flags = decode_u32(r);
+        let superclass_idx = decode_u32(r);
+        let interfaces_off = decode_u32(r);
+        let source_file_idx = decode_u32(r);
+        let annotations_off = decode_u32(r);
+        let class_data_off = decode_u32(r);
+        let static_values_off = decode_u32(r);
+        return Self {
+            class_idx,
+            access_flags,
+            superclass_idx,
+            interfaces_off,
+            source_file_idx,
+            annotations_off,
+            class_data_off,
+            static_values_off,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.class_idx);
+        encode_u32(w, self.access_flags);
+        encode_u32(w, self.superclass_idx);
+        encode_u32(w, self.interfaces_off);
+        encode_u32(w, self.source_file_idx);
+        encode_u32(w, self.annotations_off);
+        encode_u32(w, self.class_data_off);
+        encode_u32(w, self.static_values_off);
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct CallSiteIdItem {
     pub call_site_off: u32,
+}
+
+impl DexStruct for CallSiteIdItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let call_site_off = decode_u32(r);
+        return Self { call_site_off };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.call_site_off);
+    }
 }
 
 pub type CallSiteItem = EncodedArrayItem;
@@ -106,15 +413,36 @@ pub struct EncodedArrayItem {
     pub value: EncodedArray,
 }
 
+impl DexStruct for EncodedArrayItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let value = EncodedArray::deserialize(r);
+        return Self { value };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        self.value.serialize(w);
+    }
+}
+
 #[derive(Debug)]
 pub struct EncodedArray {
     pub values: Vec<EncodedValue>,
 }
 
-impl EncodedArray {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for EncodedArray {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let size = decode_uleb128(r);
         let mut values = vec![];
@@ -122,6 +450,16 @@ impl EncodedArray {
             values.push(EncodedValue::deserialize(r));
         }
         return Self { values };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_uleb128(w, self.values.len() as u32);
+        for val in self.values.iter() {
+            val.serialize(w);
+        }
     }
 }
 
@@ -148,14 +486,51 @@ pub enum EncodedValue {
 }
 
 impl EncodedValue {
-    pub fn deserialize<R>(r: &mut R) -> Self
+    fn serialize_value<W>(&self, w: &mut W, v: i64)
     where
-        R: ?Sized + io::Read,
+        W: io::Write,
+    {
+        let rb = get_required_bytes(v);
+        let val = ((rb - 1) << 5) | self.get_type_code();
+        encode_u8(w, val);
+        encode_nbytes(w, rb, v as u64);
+    }
+
+    fn get_type_code(&self) -> u8 {
+        match self {
+            EncodedValue::ValueByte(_) => 0x00,
+            EncodedValue::ValueShort(_) => 0x02,
+            EncodedValue::ValueChar(_) => 0x03,
+            EncodedValue::ValueInt(_) => 0x04,
+            EncodedValue::ValueLong(_) => 0x06,
+            EncodedValue::ValueFloat(_) => 0x10,
+            EncodedValue::ValueDouble(_) => 0x11,
+            EncodedValue::ValueMethodType(_) => 0x15,
+            EncodedValue::ValueMethodHandle(_) => 0x16,
+            EncodedValue::ValueString(_) => 0x17,
+            EncodedValue::ValueType(_) => 0x18,
+            EncodedValue::ValueField(_) => 0x19,
+            EncodedValue::ValueMethod(_) => 0x1a,
+            EncodedValue::ValueEnum(_) => 0x1b,
+            EncodedValue::ValueArray(_) => 0x1c,
+            EncodedValue::ValueAnnotation(_) => 0x1d,
+            EncodedValue::ValueNull => 0x1e,
+            EncodedValue::ValueBoolean(_) => 0x1f,
+        }
+    }
+}
+
+impl DexStruct for EncodedValue {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
     {
         // TODO: can this be serialized by assuming optimal packing?
         // E.g. for ValueDouble, shave off as many 0's to the right as you can.
         let value_byte = decode_u8(r);
-        let value_arg = ((value_byte & 0b11100000) >> 5) as usize;
+        let value_arg = (((value_byte & 0b11100000) >> 5) & 0b00000111) as usize;
         let value_type = value_byte & 0b00011111;
         match value_type {
             0x00 => {
@@ -193,10 +568,83 @@ impl EncodedValue {
             _ => panic!("unexpected value type {}", value_type),
         }
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        match self {
+            EncodedValue::ValueByte(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueShort(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueChar(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueInt(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueLong(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueFloat(v) => {
+                let rb = get_required_bytes_for_f32(*v);
+                let val = ((rb - 1) << 5) | self.get_type_code();
+                encode_u8(w, val);
+                encode_nbytes(w, rb, *v as u64);
+            }
+            EncodedValue::ValueDouble(v) => {
+                let rb = get_required_bytes_for_f64(*v);
+                let val = ((rb - 1) << 5) | self.get_type_code();
+                encode_u8(w, val);
+                encode_nbytes(w, rb, *v as u64);
+            }
+            EncodedValue::ValueMethodType(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueMethodHandle(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueString(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueType(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueField(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueMethod(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueEnum(v) => {
+                self.serialize_value(w, *v as i64);
+            }
+            EncodedValue::ValueArray(v) => {
+                encode_u8(w, self.get_type_code());
+                v.serialize(w);
+            }
+            EncodedValue::ValueAnnotation(v) => {
+                encode_u8(w, self.get_type_code());
+                v.serialize(w);
+            }
+            EncodedValue::ValueNull => {
+                encode_u8(w, self.get_type_code());
+            }
+            EncodedValue::ValueBoolean(v) => {
+                if *v {
+                    encode_u8(w, (1 << 5) | self.get_type_code());
+                } else {
+                    encode_u8(w, self.get_type_code());
+                }
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
-#[repr(C)]
 pub struct MethodHandleItem {
     pub method_handle_type: u16,
     pub unused1: u16,
@@ -204,8 +652,37 @@ pub struct MethodHandleItem {
     pub unused2: u16,
 }
 
+impl DexStruct for MethodHandleItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let method_handle_type = decode_u16(r);
+        let unused1 = decode_u16(r);
+        let field_or_method_id = decode_u16(r);
+        let unused2 = decode_u16(r);
+        return Self {
+            method_handle_type,
+            unused1,
+            field_or_method_id,
+            unused2,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u16(w, self.method_handle_type);
+        encode_u16(w, self.unused1);
+        encode_u16(w, self.field_or_method_id);
+        encode_u16(w, self.unused2);
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct ClassDataItem {
     pub static_fields_size: uleb128,
     pub instance_fields_size: uleb128,
@@ -217,10 +694,12 @@ pub struct ClassDataItem {
     pub virtual_methods: Vec<EncodedMethod>,
 }
 
-impl ClassDataItem {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for ClassDataItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let static_fields_size = decode_uleb128(r);
         let instance_fields_size = decode_uleb128(r);
@@ -250,6 +729,28 @@ impl ClassDataItem {
             virtual_methods,
         };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_uleb128(w, self.static_fields_size);
+        encode_uleb128(w, self.instance_fields_size);
+        encode_uleb128(w, self.direct_methods_size);
+        encode_uleb128(w, self.virtual_methods_size);
+        for field in self.static_fields.iter() {
+            field.serialize(w);
+        }
+        for field in self.instance_fields.iter() {
+            field.serialize(w);
+        }
+        for method in self.direct_methods.iter() {
+            method.serialize(w);
+        }
+        for method in self.virtual_methods.iter() {
+            method.serialize(w);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -258,10 +759,12 @@ pub struct EncodedField {
     pub access_flags: uleb128,
 }
 
-impl EncodedField {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for EncodedField {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let field_idx_off = decode_uleb128(r);
         let access_flags = decode_uleb128(r);
@@ -269,6 +772,14 @@ impl EncodedField {
             field_idx_off,
             access_flags,
         };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_uleb128(w, self.field_idx_off);
+        encode_uleb128(w, self.access_flags);
     }
 }
 
@@ -279,10 +790,12 @@ pub struct EncodedMethod {
     pub code_off: uleb128,
 }
 
-impl EncodedMethod {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for EncodedMethod {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let method_idx_off = decode_uleb128(r);
         let access_flags = decode_uleb128(r);
@@ -293,39 +806,67 @@ impl EncodedMethod {
             code_off,
         };
     }
-}
 
-#[derive(Debug)]
-pub struct TypeList {
-    pub size: u32,
-    pub list: Vec<TypeItem>,
-}
-
-impl TypeList {
-    pub fn deserialize<R>(r: &mut R) -> Self
+    fn serialize<W>(&self, w: &mut W)
     where
-        R: ?Sized + io::Read,
+        W: io::Write,
     {
-        let size = decode_u32(r);
-        let list = (0..size).map(|_| TypeItem::deserialize(r)).collect();
-        return Self { size, list };
+        encode_uleb128(w, self.method_idx_off);
+        encode_uleb128(w, self.access_flags);
+        encode_uleb128(w, self.code_off);
     }
 }
 
 #[derive(Debug)]
-#[repr(C)]
+pub struct TypeList {
+    pub list: Vec<TypeItem>,
+}
+
+impl DexStruct for TypeList {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let size = decode_u32(r);
+        let list = (0..size).map(|_| TypeItem::deserialize(r)).collect();
+        return Self { list };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.list.len() as u32);
+        for type_item in self.list.iter() {
+            type_item.serialize(w);
+        }
+    }
+}
+
+#[derive(Debug)]
 pub struct TypeItem {
     pub type_idx: u16,
 }
 
-impl TypeItem {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for TypeItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
         R: ?Sized + io::Read,
     {
         return Self {
             type_idx: decode_u16(r),
         };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u16(w, self.type_idx);
     }
 }
 
@@ -341,10 +882,12 @@ pub struct CodeItem {
     pub handlers: Option<EncodedCatchHandlerList>,
 }
 
-impl CodeItem {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for CodeItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read + io::Seek,
+        R: io::Read + io::BufRead,
     {
         let registers_size = decode_u16(r);
         let ins_size = decode_u16(r);
@@ -373,20 +916,28 @@ impl CodeItem {
             handlers,
         };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
-#[repr(C)]
 pub struct TryItem {
     pub start_addr: u32,
     pub insn_count: u16,
     pub handler_off: u16,
 }
 
-impl TryItem {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for TryItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let start_addr = decode_u32(r);
         let insn_count = decode_u16(r);
@@ -397,6 +948,15 @@ impl TryItem {
             handler_off,
         };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.start_addr);
+        encode_u16(w, self.insn_count);
+        encode_u16(w, self.handler_off);
+    }
 }
 
 #[derive(Debug)]
@@ -404,16 +964,25 @@ pub struct EncodedCatchHandlerList {
     pub list: Vec<EncodedCatchHandler>,
 }
 
-impl EncodedCatchHandlerList {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for EncodedCatchHandlerList {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read + io::Seek,
+        R: io::Read + io::BufRead,
     {
         let size = decode_uleb128(r);
         let list = (0..size)
             .map(|_| EncodedCatchHandler::deserialize(r))
             .collect();
         return Self { list };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        todo!()
     }
 }
 
@@ -424,10 +993,12 @@ pub struct EncodedCatchHandler {
     pub catch_all_addr: Option<uleb128>,
 }
 
-impl EncodedCatchHandler {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for EncodedCatchHandler {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read + io::Seek,
+        R: io::Read + io::BufRead,
     {
         let size = decode_sleb128(r);
         let handlers = (0..size.abs())
@@ -442,6 +1013,13 @@ impl EncodedCatchHandler {
             handlers,
             catch_all_addr,
         };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        todo!()
     }
 }
 
@@ -469,10 +1047,12 @@ pub struct DebugInfoItem {
     pub bytecode: Vec<u8>,
 }
 
-impl DebugInfoItem {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for DebugInfoItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read + io::BufRead,
+        R: io::Read + io::BufRead,
     {
         let line_start = decode_uleb128(r);
         let parameters_size = decode_uleb128(r);
@@ -487,6 +1067,13 @@ impl DebugInfoItem {
             bytecode,
         };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
@@ -500,10 +1087,12 @@ pub struct AnnotationsDirectoryItem {
     pub parameter_annotations: Vec<ParameterAnnotation>,
 }
 
-impl AnnotationsDirectoryItem {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for AnnotationsDirectoryItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let class_annotations_off = decode_u32(r);
         let fields_size = decode_u32(r);
@@ -529,17 +1118,25 @@ impl AnnotationsDirectoryItem {
             parameter_annotations,
         };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        todo!()
+    }
 }
 
 #[derive(Debug)]
-#[repr(C)]
 pub struct FieldAnnotation {
     pub field_idx: u32,
     pub annotations_off: u32,
 }
 
-impl FieldAnnotation {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for FieldAnnotation {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
         R: ?Sized + io::Read,
     {
@@ -550,17 +1147,26 @@ impl FieldAnnotation {
             annotations_off,
         };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.field_idx);
+        encode_u32(w, self.annotations_off);
+    }
 }
 
 #[derive(Debug)]
-#[repr(C)]
 pub struct MethodAnnotation {
     pub method_idx: u32,
     pub annotations_off: u32,
 }
 
-impl MethodAnnotation {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for MethodAnnotation {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
         R: ?Sized + io::Read,
     {
@@ -571,17 +1177,26 @@ impl MethodAnnotation {
             annotations_off,
         };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.method_idx);
+        encode_u32(w, self.annotations_off);
+    }
 }
 
 #[derive(Debug)]
-#[repr(C)]
 pub struct ParameterAnnotation {
     pub method_idx: u32,
     pub annotations_off: u32,
 }
 
-impl ParameterAnnotation {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for ParameterAnnotation {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
         R: ?Sized + io::Read,
     {
@@ -591,6 +1206,14 @@ impl ParameterAnnotation {
             method_idx,
             annotations_off,
         };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.method_idx);
+        encode_u32(w, self.annotations_off);
     }
 }
 
@@ -600,10 +1223,53 @@ pub struct AnnotationSetRefList {
     pub list: Vec<AnnotationSetRefItem>,
 }
 
+impl DexStruct for AnnotationSetRefList {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let size = decode_u32(r);
+        let list = (0..size)
+            .map(|_| AnnotationSetRefItem::deserialize(r))
+            .collect();
+        return Self { size, list };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.size);
+        for item in self.list.iter() {
+            item.serialize(w);
+        }
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct AnnotationSetRefItem {
     pub annotations_off: u32,
+}
+
+impl DexStruct for AnnotationSetRefItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let annotations_off = decode_u32(r);
+        return Self { annotations_off };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.annotations_off);
+    }
 }
 
 #[derive(Debug)]
@@ -612,10 +1278,53 @@ pub struct AnnotationSetItem {
     pub entries: Vec<AnnotationOffItem>,
 }
 
+impl DexStruct for AnnotationSetItem {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let size = decode_u32(r);
+        let entries = (0..size)
+            .map(|_| AnnotationOffItem::deserialize(r))
+            .collect();
+        return Self { size, entries };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.size);
+        for entry in self.entries.iter() {
+            entry.serialize(w);
+        }
+    }
+}
+
 #[derive(Debug)]
-#[repr(C)]
 pub struct AnnotationOffItem {
     pub annotation_off: u32,
+}
+
+impl DexStruct for AnnotationOffItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let annotation_off = decode_u32(r);
+        return Self { annotation_off };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.annotation_off);
+    }
 }
 
 #[derive(Debug)]
@@ -624,16 +1333,42 @@ pub struct AnnotationItem {
     pub annotation: EncodedAnnotation,
 }
 
+impl DexStruct for AnnotationItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let visibility = decode_u8(r);
+        let annotation = EncodedAnnotation::deserialize(r);
+        return Self {
+            visibility,
+            annotation,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u8(w, self.visibility);
+        self.annotation.serialize(w);
+    }
+}
+
 #[derive(Debug)]
 pub struct EncodedAnnotation {
     pub type_idx: uleb128,
     pub elements: Vec<AnnotationElement>,
 }
 
-impl EncodedAnnotation {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for EncodedAnnotation {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let type_idx = decode_uleb128(r);
         let size = decode_uleb128(r);
@@ -643,6 +1378,17 @@ impl EncodedAnnotation {
         }
         return Self { type_idx, elements };
     }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_uleb128(w, self.type_idx);
+        encode_uleb128(w, self.elements.len() as u32);
+        for element in self.elements.iter() {
+            element.serialize(w);
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -651,14 +1397,24 @@ pub struct AnnotationElement {
     pub value: EncodedValue,
 }
 
-impl AnnotationElement {
-    pub fn deserialize<R>(r: &mut R) -> Self
+impl DexStruct for AnnotationElement {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
     where
-        R: ?Sized + io::Read,
+        R: io::Read + io::BufRead,
     {
         let name_idx = decode_uleb128(r);
         let value = EncodedValue::deserialize(r);
         return Self { name_idx, value };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_uleb128(w, self.name_idx);
+        self.value.serialize(w);
     }
 }
 
@@ -669,12 +1425,29 @@ pub struct HiddenapiClassDataItem {
     pub flags: Vec<uleb128>,
 }
 
+impl DexStruct for HiddenapiClassDataItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        unimplemented!("hope this never happens lol")
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        unimplemented!("hope this never happens lol")
+    }
+}
+
 #[derive(Debug)]
 pub struct MapList {
     pub size: u32,
     pub list: Vec<MapItem>,
 }
-
 impl MapList {
     pub fn get(&self, type_code: TypeCode) -> Option<MapItem> {
         return self
@@ -686,8 +1459,30 @@ impl MapList {
     }
 }
 
+impl DexStruct for MapList {
+    const ALIGNMENT: u64 = 4;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let size = decode_u32(r);
+        let list = (0..size).map(|_| MapItem::deserialize(r)).collect();
+        return Self { size, list };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u32(w, self.size);
+        for map_item in self.list.iter() {
+            map_item.serialize(w);
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
-#[repr(C)]
 pub struct MapItem {
     pub type_code: TypeCode,
     pub unused: u16,
@@ -695,7 +1490,40 @@ pub struct MapItem {
     pub offset: u32,
 }
 
-#[derive(Debug, PartialEq, Clone, Copy)]
+impl DexStruct for MapItem {
+    const ALIGNMENT: u64 = 1;
+
+    fn deserialize<R>(r: &mut R) -> Self
+    where
+        R: io::Read + io::BufRead,
+    {
+        let type_code = unsafe {
+            let num = decode_u16(r);
+            std::mem::transmute::<u16, TypeCode>(num)
+        };
+        let unused = decode_u16(r);
+        let size = decode_u32(r);
+        let offset = decode_u32(r);
+        return Self {
+            type_code,
+            unused,
+            size,
+            offset,
+        };
+    }
+
+    fn serialize<W>(&self, w: &mut W)
+    where
+        W: io::Write,
+    {
+        encode_u16(w, self.type_code as u16);
+        encode_u16(w, self.unused);
+        encode_u32(w, self.size);
+        encode_u32(w, self.offset);
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Copy)]
 #[repr(u16)]
 pub enum TypeCode {
     TypeHeaderItem = 0x0000,
@@ -708,15 +1536,15 @@ pub enum TypeCode {
     TypeCallSiteIdItem = 0x0007,
     TypeMethodHandleItem = 0x0008,
     TypeMapList = 0x1000,
-    TypeTypeList = 0x1001,             // done
-    TypeAnnotationSetRefList = 0x1002, // done
-    TypeAnnotationSetItem = 0x1003,    // done
-    TypeClassDataItem = 0x2000,        // done
+    TypeTypeList = 0x1001,
+    TypeAnnotationSetRefList = 0x1002,
+    TypeAnnotationSetItem = 0x1003,
+    TypeClassDataItem = 0x2000,
     TypeCodeItem = 0x2001,
-    TypeStringDataItem = 0x2002,           // done
-    TypeDebugInfoItem = 0x2003,            // done
-    TypeAnnotationItem = 0x2004,           // done
-    TypeEncodedArrayItem = 0x2005,         // done
-    TypeAnnotationsDirectoryItem = 0x2006, // done
-    TypeHiddenapiClassDataItem = 0xF000,   // done
+    TypeStringDataItem = 0x2002,
+    TypeDebugInfoItem = 0x2003,
+    TypeAnnotationItem = 0x2004,
+    TypeEncodedArrayItem = 0x2005,
+    TypeAnnotationsDirectoryItem = 0x2006,
+    TypeHiddenapiClassDataItem = 0xF000,
 }
