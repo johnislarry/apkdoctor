@@ -97,28 +97,27 @@ where
         shift += 8;
     }
     // Capture sign extension by shifting payload to left side, then back.
-    result <<= 8 - n;
-    result >>= 8 - n;
+    result <<= 8 * (8 - n);
+    result >>= 8 * (8 - n);
     return result;
 }
 
 /// Reads `n` bytes from the stream `r` and interprets it as f32, zero extended to the right.
 pub(crate) fn decode_nbytes_as_f32<R>(r: &mut R, n: usize) -> f32
 where
-    R: ?Sized + io::Read,
+    R: io::Read,
 {
     assert!(n <= 4);
     let mut buf = vec![0u8; n];
-    let mut shift = 0;
+    let mut shift = 32 - 8;
     r.read_exact(&mut buf).expect("Could not decode nbytes");
     let mut result = 0u32;
-    for b in buf {
-        result |= (b as u32) << shift;
-        shift += 8;
+    for i in 0..=(n - 1) {
+        let byte = buf[n - i - 1];
+        result |= (byte as u32) << shift;
+        shift -= 8;
     }
-    // Handle right zero extension by shifting contents to left side.
-    result <<= 4 - n;
-    return result as f32;
+    return f32::from_bits(result);
 }
 
 /// Reads `n` bytes from the stream `r` and interprets it as f64, zero extended to the right.
@@ -128,45 +127,15 @@ where
 {
     assert!(n <= 8);
     let mut buf = vec![0u8; n];
-    let mut shift = 0;
+    let mut shift = 64 - 8;
     r.read_exact(&mut buf).expect("Could not decode nbytes");
     let mut result = 0u64;
-    for b in buf {
-        result |= (b as u64) << shift;
-        shift += 8;
+    for i in 0..=(n - 1) {
+        let byte = buf[n - i - 1];
+        result |= (byte as u64) << shift;
+        shift -= 8;
     }
-    // Handle right zero extension by shifting contents to left side.
-    result <<= 8 - n;
-    return result as f64;
-}
-
-pub(crate) fn decode_u64<R>(r: &mut R) -> u64
-where
-    R: ?Sized + io::Read,
-{
-    let mut buf = [0u8; 8];
-    let mut shift = 0;
-    r.read_exact(&mut buf).expect("Could not decode u64");
-    let mut result = 0u64;
-    for b in buf {
-        result |= (b as u64) << shift;
-        shift += 8;
-    }
-    return result;
-}
-
-pub(crate) fn decode_i64<R>(r: &mut R) -> i64
-where
-    R: ?Sized + io::Read,
-{
-    decode_u64(r) as i64
-}
-
-pub(crate) fn decode_f64<R>(r: &mut R) -> f64
-where
-    R: ?Sized + io::Read,
-{
-    decode_u64(r) as f64
+    return f64::from_bits(result);
 }
 
 pub(crate) fn decode_u32<R>(r: &mut R) -> u32
@@ -184,20 +153,6 @@ where
     return result;
 }
 
-pub(crate) fn decode_i32<R>(r: &mut R) -> i32
-where
-    R: ?Sized + io::Read,
-{
-    decode_u32(r) as i32
-}
-
-pub(crate) fn decode_f32<R>(r: &mut R) -> f32
-where
-    R: ?Sized + io::Read,
-{
-    decode_u32(r) as f32
-}
-
 pub(crate) fn decode_u16<R>(r: &mut R) -> u16
 where
     R: ?Sized + io::Read,
@@ -211,13 +166,6 @@ where
         shift += 8;
     }
     return result;
-}
-
-pub(crate) fn decode_i16<R>(r: &mut R) -> i16
-where
-    R: ?Sized + io::Read,
-{
-    decode_u16(r) as i16
 }
 
 pub(crate) fn decode_u8<R>(r: &mut R) -> u8
