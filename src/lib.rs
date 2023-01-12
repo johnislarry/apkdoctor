@@ -21,6 +21,7 @@ pub mod dex_model;
 pub mod dex_structs;
 mod encode;
 mod encoded_value_utils;
+mod instructions;
 
 #[allow(non_camel_case_types)]
 type uleb128 = u32;
