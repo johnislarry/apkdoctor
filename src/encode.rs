@@ -57,12 +57,7 @@ where
 pub(crate) fn size_uleb128(mut data: uleb128) -> usize {
     let mut bytes_written = 0;
     loop {
-        let mut byte = data as u8 & 0x7f;
         data >>= 7;
-        if data != 0 {
-            // More bytes to come.
-            byte &= 0x80;
-        }
         bytes_written += 1;
         if data == 0 {
             break;
@@ -78,12 +73,10 @@ pub(crate) fn size_sleb128(mut data: sleb128) -> usize {
     let mut bytes_written = 0;
     let mut more = true;
     while more {
-        let mut byte = data as u8 & 0x7f;
+        let byte = data as u8 & 0x7f;
         data >>= 7;
         if (data == 0 && (byte & 0x40) == 0) || (data == -1 && (byte & 0x40) == 0x40) {
             more = false;
-        } else {
-            byte &= 0x80;
         }
         bytes_written += 1;
         if bytes_written > 4 {
@@ -121,6 +114,13 @@ where
     data >>= 64 - (num * 8);
     w.write(&data.to_le_bytes()[0..(num as usize)])
         .expect("could not encode nbytes");
+}
+
+pub(crate) fn encode_u64<W>(w: &mut W, data: u64)
+where
+    W: io::Write,
+{
+    w.write(&data.to_le_bytes()).expect("could not encode u64");
 }
 
 pub(crate) fn encode_u32<W>(w: &mut W, data: u32)

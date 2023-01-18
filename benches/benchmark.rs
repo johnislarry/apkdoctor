@@ -10,6 +10,13 @@ fn deserialize_benchmark(c: &mut Criterion) {
             ))
         })
     });
+    group.bench_function("deserialize_serialize", |b| {
+        b.iter(|| {
+            black_box(apkdoctor::serialize(
+                apkdoctor::deserialize("./tests/assets/classes.dex".to_string()).unwrap(),
+            ))
+        })
+    });
     group.finish();
 }
 

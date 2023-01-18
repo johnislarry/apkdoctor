@@ -1,6 +1,6 @@
 use std::{
     fs::File,
-    io::{self, BufReader, Cursor, Read},
+    io::{self, BufReader, Cursor, Read, Write},
     os::unix::prelude::MetadataExt,
 };
 
@@ -19,6 +19,7 @@ macro_rules! assert_struct_eq {
         let mut cursor = Cursor::new(vec![0u8; $strct.size()]);
         $strct.serialize(&mut cursor);
         cursor.set_position(0);
+        dbg!(&$strct);
         let new_strct = <$typ>::deserialize(&mut cursor);
         assert_eq!($strct, new_strct);
     }};
@@ -137,6 +138,54 @@ fn test_compare_serialized_encoded_array_item_sections() {
             item,
         );
         last_pos = pos_so_far;
+    }
+}
+
+#[test]
+fn test_compare_serialized_code_item_sections() {
+    let filepath = "./tests/assets/classes.dex";
+    let dex = apkdoctor::deserialize(filepath.to_string()).unwrap();
+
+    let file = File::open(filepath).unwrap();
+    let reader = BufReader::new(file);
+    let bytes = reader
+        .bytes()
+        .collect::<Result<Vec<u8>, io::Error>>()
+        .unwrap();
+
+    let (i, map_item) = dex
+        .map_list
+        .list
+        .iter()
+        .enumerate()
+        .filter(|(_, x)| x.type_code == TypeCode::TypeCodeItem)
+        .last()
+        .unwrap();
+    let start = map_item.offset as usize;
+    let end = dex.map_list.list[i + 1].offset as usize;
+
+    let mut serialized_cursor = Cursor::new(vec![0u8; end - start + 1]);
+
+    let mut last_pos = 0;
+    let mut prev = &dex.code_items[0];
+    for item in dex.code_items.iter() {
+        // Ensure alignment by padding bytes when needed.
+        while serialized_cursor.position() % CodeItem::ALIGNMENT != 0 {
+            let buf = [0u8];
+            serialized_cursor.write(&buf).unwrap();
+        }
+        item.serialize(&mut serialized_cursor);
+        let pos_so_far = serialized_cursor.position() as usize;
+        let serialized_so_far = serialized_cursor.clone().into_inner();
+        assert_eq!(
+            bytes[(start + last_pos)..(start + pos_so_far)],
+            serialized_so_far[last_pos..pos_so_far],
+            "for {:?} with prev {:?}",
+            item,
+            prev
+        );
+        last_pos = pos_so_far;
+        prev = &item;
     }
 }
 

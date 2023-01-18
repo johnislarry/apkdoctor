@@ -15,6 +15,7 @@ use crate::{
         get_required_bytes_for_f32, get_required_bytes_for_f64, get_required_bytes_signed,
         get_required_bytes_unsigned,
     },
+    instructions::{decode_insns, Instruction},
     sleb128, uleb128, uleb128p1,
 };
 
@@ -992,7 +993,7 @@ pub struct CodeItem {
     pub ins_size: u16,
     pub outs_size: u16,
     pub debug_info_off: u32,
-    pub insns: Vec<u16>,
+    pub insns: Vec<Instruction>,
     pub tries: Vec<TryItem>,
     pub handlers: Option<EncodedCatchHandlerList>,
 }
@@ -1010,7 +1011,7 @@ impl DexStruct for CodeItem {
         let tries_size = decode_u16(r);
         let debug_info_off = decode_u32(r);
         let insns_size = decode_u32(r);
-        let insns = (0..insns_size).map(|_| decode_u16(r)).collect();
+        let insns = decode_insns(r, insns_size as usize);
         if tries_size != 0 && insns_size % 2 == 1 {
             // Burn off padding if needed.
             decode_u16(r);
@@ -1040,11 +1041,14 @@ impl DexStruct for CodeItem {
         encode_u16(w, self.outs_size);
         encode_u16(w, self.tries.len() as u16);
         encode_u32(w, self.debug_info_off);
-        encode_u32(w, self.insns.len() as u32);
+
+        let insns_size = self.insns.iter().map(|ins| ins.size() / 2).sum::<usize>() as u32;
+        encode_u32(w, insns_size);
+
         for insn in self.insns.iter() {
-            encode_u16(w, *insn);
+            insn.serialize(w);
         }
-        if self.tries.len() != 0 && self.insns.len() % 2 == 1 {
+        if self.tries.len() != 0 && insns_size % 2 == 1 {
             encode_u16(w, 0);
         }
         for try_item in self.tries.iter() {
@@ -1056,13 +1060,14 @@ impl DexStruct for CodeItem {
     }
 
     fn size(&self) -> usize {
+        let insns_size = self.insns.iter().map(|ins| ins.size() / 2).sum::<usize>();
         let padding;
-        if self.tries.len() != 0 && self.insns.len() % 2 == 1 {
+        if self.tries.len() != 0 && insns_size % 2 == 1 {
             padding = 2;
         } else {
             padding = 0;
         }
-        16 + 2 * self.insns.len()
+        16 + 2 * insns_size
             + padding
             + 8 * self.tries.len()
             + self.handlers.iter().map(|h| h.size()).sum::<usize>()

@@ -138,6 +138,21 @@ where
     return f64::from_bits(result);
 }
 
+pub(crate) fn decode_u64<R>(r: &mut R) -> u64
+where
+    R: ?Sized + io::Read,
+{
+    let mut buf = [0u8; 8];
+    let mut shift = 0;
+    r.read_exact(&mut buf).expect("Could not decode u32");
+    let mut result = 0u64;
+    for b in buf {
+        result |= (b as u64) << shift;
+        shift += 8;
+    }
+    return result;
+}
+
 pub(crate) fn decode_u32<R>(r: &mut R) -> u32
 where
     R: ?Sized + io::Read,

@@ -5,6 +5,7 @@ use crate::dex_structs::{
     ProtoIdItem, StringDataItem, StringIdItem, TypeIdItem, TypeList,
 };
 
+#[derive(Debug)]
 pub struct DexModel {
     pub header: Header,
     pub string_ids: Vec<StringIdItem>,

@@ -203,9 +203,13 @@ pub fn deserialize(filepath: String) -> Result<DexModel, DeserializeError> {
         }
     }
 
-    // TODO: set link_data using header link_off/size
-
     dex_model_builder.set_map_list(map_list);
+
+    dex_model_builder.set_link_data(
+        cursor.into_inner()
+            [(header.link_off as usize)..(header.link_off as usize + header.link_size as usize)]
+            .to_vec(),
+    );
 
     return Ok(dex_model_builder.build());
 }
