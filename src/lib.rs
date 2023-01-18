@@ -2,7 +2,8 @@ use std::{
     array::TryFromSliceError,
     fmt::Debug,
     fs::File,
-    io::{self, BufReader, Cursor, Read},
+    io::{self, Cursor, Read},
+    os::unix::prelude::MetadataExt,
 };
 
 use decode::decode_u8;
@@ -15,6 +16,11 @@ use dex_structs::{
     TypeIdItem, TypeList,
 };
 use encode::encode_u8;
+
+use jemallocator::Jemalloc;
+
+#[global_allocator]
+static GLOBAL: Jemalloc = Jemalloc;
 
 mod decode;
 pub mod dex_model;
@@ -69,9 +75,11 @@ fn deserialize_dex_section<T: DexStruct>(
 }
 
 pub fn deserialize(filepath: String) -> Result<DexModel, DeserializeError> {
-    let file = File::open(filepath)?;
-    let reader = BufReader::new(file);
-    let mut cursor = Cursor::new(reader.bytes().collect::<Result<Vec<u8>, io::Error>>()?);
+    let mut file = File::open(filepath)?;
+    let file_size = file.metadata().unwrap().size();
+    let mut bv: Vec<u8> = Vec::with_capacity(file_size as usize);
+    file.read_to_end(&mut bv).unwrap();
+    let mut cursor = Cursor::new(bv);
 
     let mut dex_model_builder = DexModelBuilder::new();
 
