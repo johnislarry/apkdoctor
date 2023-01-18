@@ -993,6 +993,7 @@ pub struct CodeItem {
     pub ins_size: u16,
     pub outs_size: u16,
     pub debug_info_off: u32,
+    pub insns_size: u32,
     pub insns: Vec<Instruction>,
     pub tries: Vec<TryItem>,
     pub handlers: Option<EncodedCatchHandlerList>,
@@ -1026,6 +1027,7 @@ impl DexStruct for CodeItem {
             ins_size,
             outs_size,
             debug_info_off,
+            insns_size,
             insns,
             tries,
             handlers,
@@ -1041,14 +1043,12 @@ impl DexStruct for CodeItem {
         encode_u16(w, self.outs_size);
         encode_u16(w, self.tries.len() as u16);
         encode_u32(w, self.debug_info_off);
-
-        let insns_size = self.insns.iter().map(|ins| ins.size() / 2).sum::<usize>() as u32;
-        encode_u32(w, insns_size);
+        encode_u32(w, self.insns_size);
 
         for insn in self.insns.iter() {
             insn.serialize(w);
         }
-        if self.tries.len() != 0 && insns_size % 2 == 1 {
+        if self.tries.len() != 0 && self.insns_size % 2 == 1 {
             encode_u16(w, 0);
         }
         for try_item in self.tries.iter() {
@@ -1060,14 +1060,13 @@ impl DexStruct for CodeItem {
     }
 
     fn size(&self) -> usize {
-        let insns_size = self.insns.iter().map(|ins| ins.size() / 2).sum::<usize>();
         let padding;
-        if self.tries.len() != 0 && insns_size % 2 == 1 {
+        if self.tries.len() != 0 && self.insns_size % 2 == 1 {
             padding = 2;
         } else {
             padding = 0;
         }
-        16 + 2 * insns_size
+        16 + 2 * self.insns_size as usize
             + padding
             + 8 * self.tries.len()
             + self.handlers.iter().map(|h| h.size()).sum::<usize>()
